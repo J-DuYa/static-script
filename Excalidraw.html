@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excalidraw 风格 AI 图表生成器 · GLM</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script>window.EXCALIDRAW_ASSET_PATH = "https://esm.sh/@excalidraw/excalidraw@0.18.0/dist/prod/";</script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react/jsx-runtime": "https://esm.sh/react@19.0.0/jsx-runtime",
+    "react-dom": "https://esm.sh/react-dom@19.0.0"
+  }
+}
+</script>
+<style>
+  body { font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f1f5f9; }
+  .editor-font { font-family: "Fira Code", "JetBrains Mono", Consolas, monospace; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  #canvasArea {
+    background-color: #ffffff;
+    background-image:
+      radial-gradient(circle at 20% 30%, rgba(0,0,0,.025) 0 1.5px, transparent 1.5px),
+      radial-gradient(circle at 70% 80%, rgba(0,0,0,.02) 0 1.5px, transparent 1.5px);
+    background-size: 90px 90px, 130px 130px;
+    cursor: grab; overflow: hidden; user-select: none;
+  }
+  #canvasArea.dragging { cursor: grabbing; }
+  #stage {
+    position: absolute; top: 50%; left: 50%;
+    transform-origin: center center; will-change: transform;
+    pointer-events: none;
+  }
+  #stage > * { pointer-events: auto; }
+  #stage svg { display: block; }
+  .loading-dots::after { content: '.'; animation: dots 1.5s steps(5, end) infinite; }
+  @keyframes dots {
+    0%, 20% { color: rgba(0,0,0,0); text-shadow: .25em 0 0 rgba(0,0,0,0), .5em 0 0 rgba(0,0,0,0); }
+    40% { color: #4338ca; text-shadow: .25em 0 0 rgba(0,0,0,0), .5em 0 0 rgba(0,0,0,0); }
+    60% { text-shadow: .25em 0 0 #4338ca, .5em 0 0 rgba(0,0,0,0); }
+    80%, 100% { text-shadow: .25em 0 0 #4338ca, .5em 0 0 #4338ca; }
+  }
+  .fade-in { animation: fadeIn .25s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .chip { transition: all .15s ease; }
+  .chip:hover { transform: translateY(-1px); }
+  .hint-pill { backdrop-filter: blur(8px); background: rgba(255,255,255,.8); border: 1px solid rgba(203,213,225,.6); }
+  #libStatus {
+    position: fixed; top: 64px; right: 16px; z-index: 40;
+    padding: 8px 14px; border-radius: 10px; font-size: 12px; font-weight: 500;
+    box-shadow: 0 4px 14px -4px rgba(0,0,0,.15);
+    transition: opacity .3s ease, transform .3s ease;
+  }
+  #libStatus.hidden { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+  #libStatus.loading { background: #FEF3C7; color: #92400E; }
+  #libStatus.ready { background: #D1FAE5; color: #065F46; }
+  #libStatus.error { background: #FEE2E2; color: #991B1B; }
+</style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+<header class="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm z-20 shrink-0">
+  <div class="flex items-center gap-3">
+    <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg"
+         style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 6px 16px -4px rgba(99,102,241,.5)">
+      <i class="fa-solid fa-pen-ruler text-lg"></i>
+    </div>
+    <div>
+      <h1 class="text-lg font-bold text-slate-800 leading-tight">Excalidraw 风格 AI 图表生成器</h1>
+      <p class="text-[11px] text-slate-500">智谱 GLM + Excalidraw 官方渲染管线</p>
+    </div>
+  </div>
+  <div class="flex items-center gap-2">
+    <span id="modeBadge" class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 text-[11px] font-medium">
+      <i class="fa-solid fa-plug-circle-bolt"></i><span id="modeText">离线演示</span>
+    </span>
+    <button type="button" onclick="openSettings()" class="px-3 py-2 text-sm text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition font-medium">
+      <i class="fa-solid fa-key mr-1.5"></i>填入 API Key
+    </button>
+    <div class="h-6 w-px bg-slate-200"></div>
+    <button type="button" onclick="clearAll()" class="px-3 py-2 text-sm text-slate-600 hover:text-red-500 hover:bg-red-50 rounded-lg transition font-medium">
+      <i class="fa-solid fa-trash-can mr-1.5"></i>清空
+    </button>
+    <button type="button" onclick="exportSVG()" class="px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition text-sm font-medium shadow-sm">
+      <i class="fa-solid fa-file-code mr-1.5"></i>SVG
+    </button>
+    <button type="button" onclick="exportPNG()" class="px-4 py-2 text-white rounded-lg transition text-sm font-medium shadow-md"
+            style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 4px 12px -2px rgba(99,102,241,.45)">
+      <i class="fa-solid fa-download mr-1.5"></i>导出 PNG
+    </button>
+  </div>
+</header>
+
+<div id="libStatus" class="loading">正在加载 Excalidraw 引擎…</div>
+
+<main class="flex-1 flex overflow-hidden">
+  <aside class="w-[380px] min-w-[340px] bg-white border-r border-slate-200 flex flex-col shrink-0">
+    <div class="p-5 border-b border-slate-100 bg-gradient-to-b from-slate-50 to-white">
+      <label class="block text-sm font-semibold text-slate-700 mb-2">
+        <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 mr-1.5"></i>描述你想要的图表
+      </label>
+      <textarea id="promptInput" rows="4"
+        class="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500 outline-none text-sm text-slate-700 placeholder-slate-400 resize-none shadow-sm transition"
+        placeholder="例如：画一个用户下单流程，包含浏览商品、加入购物车、提交订单、支付、发货五个步骤…"></textarea>
+      <div class="mt-2.5 flex flex-wrap gap-1.5">
+        <button type="button" class="chip text-[11px] px-2.5 py-1 rounded-full bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600"
+                onclick="fillExample('用户注册流程：输入邮箱、验证密码强度、发送验证码、校验验证码、创建账户，密码强度不够或验证码错误都要退回重填')">用户注册</button>
+        <button type="button" class="chip text-[11px] px-2.5 py-1 rounded-full bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600"
+                onclick="fillExample('AI 漫画线条图生成的技术架构：前端 UI 层、AI 生成层、渲染与风格层、导出层，展示它们的数据流向')">技术架构</button>
+        <button type="button" class="chip text-[11px] px-2.5 py-1 rounded-full bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600"
+                onclick="fillExample('用户下单流程：浏览商品、加入购物车、提交订单、支付、发货，支付失败要回到订单页')">下单流程</button>
+      </div>
+      <div class="mt-3 flex justify-between items-center gap-2">
+        <select id="chartType"
+          class="text-xs border border-slate-300 rounded-lg px-2.5 py-2 bg-white text-slate-600 outline-none focus:border-indigo-500 cursor-pointer">
+          <option value="flowchart">流程图 Flowchart</option>
+          <option value="sequence">序列图 Sequence</option>
+        </select>
+        <button type="button" id="genBtn" onclick="generateChart()"
+          class="flex-1 px-4 py-2.5 text-white text-sm font-semibold rounded-xl shadow-md transition flex items-center justify-center gap-2"
+          style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 4px 14px -2px rgba(99,102,241,.5)">
+          <span id="btnText">生成图表</span>
+          <i id="btnIcon" class="fa-solid fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="flex-1 flex flex-col bg-slate-900 min-h-0">
+      <div class="px-4 py-2 bg-slate-800 border-b border-slate-700 flex justify-between items-center shrink-0">
+        <span class="text-xs text-slate-400 font-mono flex items-center gap-2">
+          <i class="fa-solid fa-code text-indigo-400"></i>Mermaid Source
+        </span>
+        <div class="flex items-center gap-3">
+          <button type="button" onclick="repairCode()" class="text-xs text-amber-400 hover:text-amber-300 transition">
+            <i class="fa-solid fa-wrench mr-1"></i>修复
+          </button>
+          <button type="button" onclick="copyCode()" class="text-xs text-slate-400 hover:text-white transition">
+            <i class="fa-regular fa-copy mr-1"></i>复制
+          </button>
+        </div>
+      </div>
+      <textarea id="mermaidCode"
+        class="flex-1 w-full bg-slate-900 text-emerald-300 p-4 editor-font text-[13px] leading-relaxed resize-none outline-none border-none min-h-0"
+        spellcheck="false" placeholder="Mermaid 代码会出现在这里，也可以直接手写编辑…"></textarea>
+      <div id="errorToast"
+           class="hidden m-3 bg-red-500/95 text-white text-xs p-3 rounded-lg shadow-lg backdrop-blur flex items-start gap-2">
+        <i class="fa-solid fa-circle-exclamation mt-0.5"></i>
+        <span id="errorMsg" class="flex-1 leading-relaxed">语法错误</span>
+        <button type="button" onclick="hideError()" class="opacity-70 hover:opacity-100"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
+  </aside>
+
+  <section class="flex-1 relative flex flex-col min-w-0">
+    <div class="h-12 border-b border-slate-200 bg-white flex items-center justify-between px-4 shrink-0 z-10">
+      <div class="flex items-center gap-2.5">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Preview</span>
+        <span id="statusBadge" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">READY</span>
+      </div>
+      <div class="flex items-center gap-1">
+        <span class="text-[11px] text-slate-400 mr-1 font-mono" id="zoomLabel">100%</span>
+        <button type="button" onclick="zoomOut()" title="缩小" class="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center justify-center transition"><i class="fa-solid fa-minus text-xs"></i></button>
+        <button type="button" onclick="resetView()" title="复位视图" class="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center justify-center transition"><i class="fa-solid fa-compress text-xs"></i></button>
+        <button type="button" onclick="zoomIn()" title="放大" class="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center justify-center transition"><i class="fa-solid fa-plus text-xs"></i></button>
+        <div class="h-5 w-px bg-slate-200 mx-1"></div>
+        <button type="button" onclick="fitToView()" title="适应画布" class="px-2.5 h-8 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center gap-1.5 transition text-xs font-medium">
+          <i class="fa-solid fa-expand text-xs"></i>适应
+        </button>
+        <button type="button" onclick="changeStyle()" title="换手绘风格" class="px-2.5 h-8 rounded-lg hover:bg-slate-100 text-slate-600 flex items-center gap-1.5 transition text-xs font-medium">
+          <i class="fa-solid fa-shuffle text-xs"></i>换风格
+        </button>
+      </div>
+    </div>
+
+    <div id="canvasArea" class="flex-1 relative">
+      <div id="stage">
+        <div class="text-center text-slate-400 py-16 select-none" id="emptyState">
+          <div class="w-20 h-20 mx-auto mb-5 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center">
+            <i class="fa-solid fa-pen-fancy text-3xl text-slate-300"></i>
+          </div>
+          <p class="text-sm font-medium text-slate-500">在左侧描述你想要的图表</p>
+          <p class="text-xs text-slate-400 mt-1.5">Excalidraw 官方渲染管线</p>
+        </div>
+      </div>
+      <div class="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none">
+        <div class="hint-pill px-3.5 py-1.5 rounded-full text-[11px] text-slate-600 flex items-center gap-3 shadow-sm">
+          <span><i class="fa-solid fa-hand-pointer mr-1 text-slate-400"></i>拖拽平移</span>
+          <span class="w-px h-3 bg-slate-300"></span>
+          <span><i class="fa-solid fa-magnifying-glass-plus mr-1 text-slate-400"></i>Ctrl+滚轮缩放</span>
+          <span class="w-px h-3 bg-slate-300"></span>
+          <span><i class="fa-solid fa-arrows-to-dot mr-1 text-slate-400"></i>双击复位</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="loadingOverlay" class="absolute inset-0 bg-white/75 backdrop-blur-sm z-20 hidden flex-col items-center justify-center">
+      <div class="w-14 h-14 border-4 border-indigo-100 border-t-indigo-600 rounded-full animate-spin mb-5"></div>
+      <p id="loadingText" class="text-indigo-900 font-semibold loading-dots text-sm">GLM 正在构思图表</p>
+    </div>
+  </section>
+</main>
+
+<div id="settingsModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden fade-in">
+    <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center"><i class="fa-solid fa-key"></i></div>
+        <div>
+          <h3 class="font-bold text-slate-800 text-sm">填入智谱 API Key</h3>
+          <p class="text-[11px] text-slate-500">端点与模型已预设，开箱即用</p>
+        </div>
+      </div>
+      <button type="button" onclick="closeSettings()" class="text-slate-400 hover:text-slate-700 transition"><i class="fa-solid fa-xmark text-lg"></i></button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">API Key</label>
+        <div class="relative">
+          <input id="cfgApiKey" type="text" autocomplete="off" spellcheck="false"
+                 class="w-full px-3 py-3 pr-10 border border-slate-300 rounded-lg text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition"
+                 placeholder="粘贴你的智谱 API Key">
+          <button type="button" onclick="toggleKeyVisible()" class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+            <i id="eyeIcon" class="fa-regular fa-eye text-sm"></i>
+          </button>
+        </div>
+      </div>
+      <div class="bg-indigo-50 rounded-xl p-4 space-y-2">
+        <p class="text-[11px] text-indigo-700 font-semibold flex items-center gap-1.5"><i class="fa-solid fa-circle-info"></i>使用说明</p>
+        <ul class="text-[11px] text-indigo-600/80 leading-relaxed space-y-1 pl-4 list-disc">
+          <li>访问 <a href="https://bigmodel.cn" target="_blank" class="underline font-medium">bigmodel.cn</a> 注册账号</li>
+          <li>进入「API Keys」管理页面，新建一个 Key 并复制</li>
+          <li>当前使用免费模型 <code class="bg-indigo-100 px-1 rounded">glm-4-flash</code></li>
+        </ul>
+      </div>
+      <p class="text-[11px] text-slate-400 flex items-start gap-1.5">
+        <i class="fa-solid fa-shield-halved mt-0.5"></i>
+        <span>Key 仅保存在你本地浏览器 localStorage。</span>
+      </p>
+    </div>
+    <div class="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+      <button type="button" onclick="clearConfig()" class="text-xs text-slate-500 hover:text-red-500 transition font-medium">
+        <i class="fa-solid fa-rotate-left mr-1"></i>清除 Key
+      </button>
+      <div class="flex gap-2">
+        <button type="button" onclick="closeSettings()" class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-200 rounded-lg transition font-medium">取消</button>
+        <button type="button" onclick="saveSettings()" class="px-5 py-2 text-sm text-white rounded-lg transition font-medium shadow-md"
+                style="background:linear-gradient(135deg,#6366f1,#8b5cf6)"><i class="fa-solid fa-check mr-1.5"></i>保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] hidden">
+  <div class="bg-slate-900 text-white text-sm px-5 py-3 rounded-xl shadow-2xl flex items-center gap-2.5">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toastMsg">操作成功</span>
+  </div>
+</div>
+
+<script type="module">
+/* ========== 全局状态 ========== */
+const STORAGE_KEY = 'excalidraw-chart-glm-v4';
+const DEFAULT_CONFIG = {
+  endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+  apiKey: '',
+  model: 'glm-4-flash'
+};
+
+let appConfig = loadConfig();
+let renderToken = 0;
+let debounceTimer = null;
+let currentSloppiness = 1.5;
+let currentSeed = 0;
+let view = { x: 0, y: 0, scale: 1 };
+
+let parseMermaidToExcalidraw = null;
+let convertToExcalidrawElements = null;
+let exportToSvg = null;
+let libState = 'loading';
+
+const $ = (id) => document.getElementById(id);
+
+/* ========== 依赖检测 ========== */
+function isExcalidrawReady() {
+  return typeof convertToExcalidrawElements === 'function' && typeof exportToSvg === 'function';
+}
+function isMermaidConverterReady() {
+  return typeof parseMermaidToExcalidraw === 'function';
+}
+
+/* ========== 配置 ========== */
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_CONFIG };
+    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+  } catch { return { ...DEFAULT_CONFIG }; }
+}
+function persistConfig() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appConfig)); } catch {}
+}
+function refreshModeBadge() {
+  const hasKey = !!appConfig.apiKey;
+  $('modeText').textContent = hasKey ? 'GLM 在线' : '离线演示';
+  $('modeBadge').className = hasKey
+    ? 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 text-[11px] font-medium'
+    : 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-600 text-[11px] font-medium';
+}
+
+/* ========== 库状态 ========== */
+function setLibStatus(state, text) {
+  const el = $('libStatus');
+  libState = state;
+  el.className = state;
+  el.textContent = text;
+  if (state === 'ready') setTimeout(() => el.classList.add('hidden'), 1500);
+  else el.classList.remove('hidden');
+}
+
+/* ========== 代码清洗 ========== */
+function cleanMermaidCode(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim();
+  s = s.replace(/^```(?:mermaid|mmd)?\s*\r?\n?/i, '');
+  s = s.replace(/\r?\n?```\s*$/, '');
+  s = s.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/, '');
+  s = s.replace(/^mermaid\s*\r?\n/i, '');
+  return s.trim();
+}
+
+/* ========== 【关键】Mermaid 代码自动修复 ========== */
+function repairMermaidCode(code) {
+  if (!code) return '';
+  let s = code.trim();
+
+  // 1. 全角标点 → 半角
+  s = s.replace(/：/g, ':').replace(/，/g, ',').replace(/；/g, ';');
+
+  let idNum = 0;
+  const genId = () => `N${++idNum}`;
+
+  // 2. 修复 `(()) 文字` → 补节点 ID 和括号
+  //    例：`(()) 开始` → `N1(("开始"))`
+  s = s.replace(/\(\s*\(\s*\)\s*\)\s*([^\s\[\]\(\)\{\}"'|>,]+)/g, (m, text) => {
+    return `${genId()}(("${text}"))`;
+  });
+
+  // 3. 修复 `[] 文字` → 补 ID（空方括号后跟文字）
+  s = s.replace(/\[\s*\]\s*([^\s\[\]\(\)\{\}"'|>,]+)/g, (m, text) => {
+    return `${genId()}["${text}"]`;
+  });
+
+  // 4. 修复 `{} 文字` → 补 ID（空花括号后跟文字）
+  s = s.replace(/\{\s*\}\s*([^\s\[\]\(\)\{\}"'|>,]+)/g, (m, text) => {
+    return `${genId()}{"${text}"}`;
+  });
+
+  // 5. 修复 `(()) 开始 A["xxx"]` 这种把多个节点连写的错误
+  //    把 `((文字1)) 文字2` 拆成两行
+  s = s.replace(/(\(\("([^"]+)"\)\))\s+([^\s\[\]\(\)\{\}"'|>,]+)\s*(\[|\{|\()/g, (m, g1, name, mid, g4) => {
+    return `${g1}\n    ${mid.trim()} ${g4}`;
+  });
+
+  // 6. 修复"没有箭头的连线" —— 例如 `A["x"] B["y"]` 之间补箭头
+  //    只在同一行出现两个及以上完整节点但没有 --> 时补上
+  s = s.split('\n').map(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('flowchart') || trimmed.startsWith('sequence')
+        || trimmed.startsWith('graph') || trimmed.startsWith('subgraph')
+        || trimmed.startsWith('end') || trimmed.startsWith('%%')
+        || trimmed.startsWith('participant') || trimmed.startsWith('activate')
+        || trimmed.startsWith('deactivate') || trimmed.startsWith('note')
+        || trimmed.includes('-->') || trimmed.includes('---')
+        || trimmed.includes('->>') || trimmed.includes('-->>')
+        || trimmed.includes('->') || trimmed.includes('|')) {
+      return line;
+    }
+    // 匹配两个完整节点紧邻
+    const nodeRegex = /([A-Za-z_][\w]*\s*(?:\(\([^)]*\)\)|\[[^\]]*\]|\{[^}]*\}|\([^)]*\)))/g;
+    const matches = trimmed.match(nodeRegex);
+    if (matches && matches.length >= 2 && !trimmed.includes('-->')) {
+      // 用 --> 连接它们
+      let result = trimmed;
+      let idx = 0;
+      result = result.replace(nodeRegex, (m) => {
+        idx++;
+        return idx === 1 ? m : `--> ${m}`;
+      });
+      return result;
+    }
+    return line;
+  }).join('\n');
+
+  // 7. 去掉多余空行
+  s = s.split('\n').map(l => l.trimEnd()).join('\n');
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s.trim();
+}
+
+/* ========== GLM Prompt（强化版） ========== */
+function buildSystemPrompt(chartType) {
+  const isFlow = chartType !== 'sequence';
+
+  const flowExample = `正确示例：
+\`\`\`
+flowchart TD
+    A((开始)) --> B["用户输入信息"]
+    B --> C{"信息是否完整?"}
+    C -->|是| D["提交到服务端"]
+    C -->|否| E["提示补充信息"]
+    E --> B
+    D --> F((结束))
+\`\`\``;
+
+  const seqExample = `正确示例：
+\`\`\`
+sequenceDiagram
+    participant U as 用户
+    participant S as 服务端
+    U->>S: 发起请求
+    activate S
+    S-->>U: 返回响应
+    deactivate S
+\`\`\``;
+
+  return `你是 Mermaid v11 代码生成器。用户描述需求，你只输出可直接渲染的 Mermaid 代码。
+
+【绝对禁止】
+✗ 禁止输出 markdown 代码块标记（\`\`\`）
+✗ 禁止输出任何解释文字
+✗ 禁止输出 \`---\` 配置块
+✗ 禁止只写形状不写 ID：例如 \`(()) 开始\` 是错的
+✗ 禁止写 \`(()) 开始 A["用户请求"]\` 这种把多个节点拼在一行的写法
+
+【必须遵守】
+✓ 每个节点必须写成 \`ID[文字]\` / \`ID((文字))\` / \`ID{文字}\` 的完整形式
+✓ ID 用英文字母或"字母+数字"（如 A、B、Start、End、Node1）
+✓ 若文字含括号、冒号、逗号、斜杠、问号、感叹号等，必须用双引号包裹
+✓ 节点之间用 \`-->\` 连接，箭头两端都要写节点 ID
+✓ 判断节点用 \`{}\`，普通节点用 \`[]\`，开始/结束节点用 \`(())\`
+✓ 连线标签写成 \`A -->|是| B\`，标签文字不加引号
+✓ 每个节点/连线单独一行
+✓ 第一行必须是 \`flowchart TD\`（或 TD/LR）或 \`sequenceDiagram\`
+
+${isFlow ? flowExample : seqExample}
+
+【输出要求】
+- 只输出 Mermaid 代码，第一行是图表声明
+- 节点文字用简体中文，控制在 12 字以内
+- 节点数量 6~14 个
+- 不得使用中文标点（除节点文字内容外）
+
+现在请根据用户描述生成代码。只输出代码，不要任何其他内容。`;
+}
+
+async function callLLM(prompt, chartType) {
+  const res = await fetch(appConfig.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${appConfig.apiKey}`
+    },
+    body: JSON.stringify({
+      model: appConfig.model,
+      temperature: 0.1,
+      messages: [
+        { role: 'system', content: buildSystemPrompt(chartType) },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.text()).slice(0, 220); } catch {}
+    if (res.status === 401) throw new Error('API Key 无效或已过期，请重新填入。');
+    throw new Error(`GLM 接口返回 ${res.status}。${detail}`);
+  }
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('GLM 返回内容为空，请检查模型是否可用。');
+  return content;
+}
+
+/* ========== 离线兜底 ========== */
+function fallbackGenerator(prompt, type) {
+  const p = (prompt || '').toLowerCase();
+  if (type === 'flowchart') {
+    if (/注册|register/.test(p)) {
+      return `flowchart TD
+    Start((开始)) --> Input["输入邮箱与密码"]
+    Input --> Check{"密码强度合格?"}
+    Check -->|否| Tip["提示重新输入"]
+    Tip --> Input
+    Check -->|是| Send["发送验证码"]
+    Send --> Verify{"验证码正确?"}
+    Verify -->|否| Resend["重新发送"]
+    Resend --> Verify
+    Verify -->|是| Create["创建账户"]
+    Create --> Done((注册成功))`;
+    }
+    if (/订单|下单|购物|支付/.test(p)) {
+      return `flowchart LR
+    A((开始)) --> B["浏览商品"]
+    B --> C["加入购物车"]
+    C --> D["提交订单"]
+    D --> E["选择支付方式"]
+    E --> F{"支付成功?"}
+    F -->|否| G["取消订单"]
+    G --> H((结束))
+    F -->|是| I["生成发货单"]
+    I --> J["物流配送"]
+    J --> H`;
+    }
+    if (/架构|系统|技术/.test(p)) {
+      return `flowchart TD
+    subgraph UI["前端 UI 层"]
+        A1["Prompt 输入"]
+        A2["代码编辑器"]
+        A3["预览画布"]
+    end
+    subgraph AI["AI 生成层"]
+        B1["GLM 调用"]
+        B2["Mermaid 校验"]
+    end
+    subgraph RENDER["渲染与风格层"]
+        C1["Excalidraw 转换"]
+        C2["SVG 导出"]
+    end
+    A1 --> B1
+    B1 --> B2
+    B2 --> C1
+    C1 --> C2
+    C2 --> A3`;
+    }
+    return `flowchart TD
+    A((开始)) --> B["需求收集"]
+    B --> C["方案设计"]
+    C --> D{"评审是否通过?"}
+    D -->|否| E["修订方案"]
+    E --> C
+    D -->|是| F["实施落地"]
+    F --> G["验证交付"]
+    G --> H((结束))`;
+  }
+  if (type === 'sequence') {
+    return `sequenceDiagram
+    participant A as 客户端
+    participant B as 服务端
+    participant C as 数据库
+    A->>B: 发起请求
+    activate B
+    B->>C: 读取数据
+    activate C
+    C-->>B: 返回结果集
+    deactivate C
+    B-->>A: 返回响应
+    deactivate B`;
+  }
+  return `flowchart TD
+    A((开始)) --> B["处理"]
+    B --> C((结束))`;
+}
+
+/* ========== 生成主流程（含自动重试） ========== */
+async function generateChart() {
+  const prompt = $('promptInput').value.trim();
+  const type = $('chartType').value;
+
+  if (!prompt) { toast('请先输入图表描述', 'warn'); $('promptInput').focus(); return; }
+  if (libState !== 'ready') { toast('渲染引擎尚未就绪，请稍候…', 'warn'); return; }
+
+  showLoading(true, 'GLM 正在构思图表');
+  hideError();
+  setStatus('pending', 'GENERATING');
+
+  try {
+    let code;
+    if (appConfig.apiKey) {
+      code = await callLLM(prompt, type);
+    } else {
+      await new Promise(r => setTimeout(r, 500));
+      code = fallbackGenerator(prompt, type);
+      toast('未配置 API Key，已使用离线规则生成', 'warn');
+    }
+
+    code = repairMermaidCode(cleanMermaidCode(code));
+    $('mermaidCode').value = code;
+
+    // 尝试渲染，最多重试 1 次（让 GLM 自我修复）
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await renderWithExcalidraw(code, true);  // throwOnError = true
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[尝试 ${attempt + 1}] 渲染失败：`, err.message);
+
+        if (attempt === 0 && appConfig.apiKey) {
+          // 让 GLM 修复
+          showLoading(true, 'AI 正在修复语法错误');
+          toast('首次生成有语法错误，让 AI 自动修复…', 'warn');
+          const fixPrompt = `你之前生成的 Mermaid 代码有语法错误，请修正后重新输出。
+
+【错误信息】
+${err.message}
+
+【原代码】
+${code}
+
+【修复要求】
+- 严格按照规则输出，每个节点必须有 ID，例如 \`A((开始))\`
+- 节点之间必须用箭头连接
+- 只输出修正后的完整 Mermaid 代码，不要任何解释文字，不要 markdown 标记`;
+
+          try {
+            const fixed = await callLLM(fixPrompt, type);
+            code = repairMermaidCode(cleanMermaidCode(fixed));
+            $('mermaidCode').value = code;
+          } catch (fixErr) {
+            console.error('GLM 修复失败', fixErr);
+            throw lastErr;
+          }
+        }
+      }
+    }
+
+    if (lastErr) throw lastErr;
+
+  } catch (err) {
+    console.error(err);
+    setStatus('error', 'ERROR');
+    showError('生成失败：' + (err.message || '未知错误').slice(0, 200));
+
+    // 最终降级：使用离线模板
+    if (appConfig.apiKey) {
+      toast('AI 生成失败，已降级为离线模板', 'error');
+      const code = repairMermaidCode(cleanMermaidCode(fallbackGenerator(prompt, type)));
+      $('mermaidCode').value = code;
+      try {
+        await renderWithExcalidraw(code, true);
+      } catch (e) {
+        console.error('降级渲染也失败', e);
+      }
+    }
+  } finally {
+    showLoading(false);
+  }
+}
+
+/* ========== 渲染管线（可抛出异常用于重试） ========== */
+async function renderWithExcalidraw(code, throwOnError = false) {
+  const token = ++renderToken;
+  const stage = $('stage');
+
+  const cleaned = cleanMermaidCode(code);
+  if (!cleaned) { showEmptyState(); return; }
+
+  if (!isMermaidConverterReady() || !isExcalidrawReady()) {
+    const err = new Error('渲染引擎未就绪');
+    if (throwOnError) throw err;
+    showError(err.message);
+    return;
+  }
+
+  if (document.fonts && document.fonts.ready) await document.fonts.ready;
+  await new Promise(r => requestAnimationFrame(r));
+
+  try {
+    const { elements: skeletonElements, files } =
+      await parseMermaidToExcalidraw(cleaned, {
+        themeVariables: { fontSize: '16px' },
+        flowchart: { curve: 'basis' }
+      });
+
+    if (!skeletonElements || skeletonElements.length === 0) {
+      throw new Error('解析结果为空');
+    }
+
+    const excalidrawElements = convertToExcalidrawElements(skeletonElements);
+    applyHandDrawnStyle(excalidrawElements);
+
+    if (token !== renderToken) return;
+
+    const svg = await exportToSvg({
+      elements: excalidrawElements,
+      appState: {
+        exportBackground: true,
+        viewBackgroundColor: '#ffffff',
+        exportWithDarkMode: false
+      },
+      files: files || null,
+      exportPadding: 30
+    });
+
+    if (token !== renderToken) return;
+
+    stage.innerHTML = '';
+    svg.style.maxWidth = 'none';
+    svg.style.height = 'auto';
+    stage.appendChild(svg);
+
+    const vb = svg.getAttribute('viewBox');
+    if (vb) {
+      const parts = vb.trim().split(/[\s,]+/).map(Number);
+      if (parts.length === 4) {
+        stage.dataset.svgWidth = parts[2];
+        stage.dataset.svgHeight = parts[3];
+      }
+    }
+
+    setStatus('success', 'SUCCESS');
+    hideError();
+    requestAnimationFrame(() => fitToView(true));
+
+  } catch (err) {
+    if (token !== renderToken) return;
+    console.error('[excalidraw-render]', err);
+    setStatus('error', 'ERROR');
+    const msg = '渲染失败：' + (err?.message || '未知错误').slice(0, 200);
+    showError(msg);
+    if (throwOnError) throw new Error(err?.message || '渲染失败');
+  }
+}
+
+function applyHandDrawnStyle(elements) {
+  const seed = currentSeed || Math.floor(Math.random() * 100000);
+  elements.forEach(el => {
+    el.roughness = currentSloppiness;
+    el.seed = seed;
+    el.strokeStyle = 'solid';
+    if (typeof el.strokeWidth === 'number') el.strokeWidth = el.strokeWidth || 2;
+    if (el.type === 'rectangle' || el.type === 'diamond') {
+      el.roundness = { type: 3 };
+    }
+    if (el.type === 'text') el.fontFamily = 1;
+    if (el.type === 'rectangle' || el.type === 'ellipse' || el.type === 'diamond') {
+      el.fillStyle = 'solid';
+      el.backgroundColor = el.backgroundColor || 'transparent';
+    }
+  });
+}
+
+/* ========== 空状态 ========== */
+function showEmptyState() {
+  $('stage').innerHTML = `
+    <div class="text-center text-slate-400 py-16 select-none">
+      <div class="w-20 h-20 mx-auto mb-5 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center">
+        <i class="fa-solid fa-pen-fancy text-3xl text-slate-300"></i>
+      </div>
+      <p class="text-sm font-medium text-slate-500">在左侧描述你想要的图表</p>
+      <p class="text-xs text-slate-400 mt-1.5">Excalidraw 官方渲染管线</p>
+    </div>`;
+  setStatus('idle', 'READY');
+  view.x = 0; view.y = 0; view.scale = 1;
+  applyTransform(false);
+  delete $('stage').dataset.svgWidth;
+  delete $('stage').dataset.svgHeight;
+}
+
+/* ========== 视图控制 ========== */
+function applyTransform(animate = false) {
+  const stage = $('stage');
+  if (animate) {
+    stage.style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
+    setTimeout(() => { stage.style.transition = ''; }, 240);
+  } else stage.style.transition = '';
+  stage.style.transform =
+    `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+  $('zoomLabel').textContent = Math.round(view.scale * 100) + '%';
+}
+function zoomIn()  { view.scale = Math.min(view.scale * 1.15, 5); applyTransform(true); }
+function zoomOut() { view.scale = Math.max(view.scale / 1.15, 0.15); applyTransform(true); }
+function resetView(animate = true) { view.x = 0; view.y = 0; view.scale = 1; applyTransform(animate); }
+
+function fitToView(animate = false) {
+  const stage = $('stage');
+  const area = $('canvasArea');
+  const svg = stage.querySelector('svg');
+  if (!svg || !area) return;
+
+  const areaW = area.clientWidth;
+  const areaH = area.clientHeight;
+
+  let svgW = parseFloat(stage.dataset.svgWidth);
+  let svgH = parseFloat(stage.dataset.svgHeight);
+
+  if (!svgW || !svgH) {
+    const vb = svg.getAttribute('viewBox');
+    if (vb) {
+      const parts = vb.trim().split(/[\s,]+/).map(Number);
+      if (parts.length === 4) { svgW = parts[2]; svgH = parts[3]; }
+    }
+  }
+  if (!svgW || !svgH) {
+    const rect = svg.getBoundingClientRect();
+    svgW = rect.width || 800; svgH = rect.height || 600;
+  }
+  if (!svgW || !svgH) return;
+
+  const padding = 80;
+  let s = Math.min((areaW - padding) / svgW, (areaH - padding) / svgH);
+  s = Math.min(Math.max(s, 0.3), 1.6);
+
+  view.scale = s;
+  view.x = 0;
+  view.y = 0;
+  applyTransform(animate);
+}
+
+/* ========== 拖拽平移 ========== */
+(function initDrag() {
+  const area = $('canvasArea');
+  let dragging = false, startX = 0, startY = 0, startViewX = 0, startViewY = 0;
+
+  function isInteractive(el) {
+    if (!el) return false;
+    return !!el.closest('button, a, input, textarea, select, [contenteditable="true"]');
+  }
+
+  area.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || isInteractive(e.target)) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startViewX = view.x; startViewY = view.y;
+    area.classList.add('dragging');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    view.x = startViewX + (e.clientX - startX);
+    view.y = startViewY + (e.clientY - startY);
+    applyTransform(false);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    area.classList.remove('dragging');
+  });
+  area.addEventListener('dblclick', (e) => {
+    if (isInteractive(e.target)) return;
+    resetView();
+  });
+
+  let tStartX = 0, tStartY = 0, tViewX = 0, tViewY = 0;
+  area.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || isInteractive(e.target)) return;
+    const t = e.touches[0];
+    tStartX = t.clientX; tStartY = t.clientY;
+    tViewX = view.x; tViewY = view.y;
+  }, { passive: true });
+  area.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    view.x = tViewX + (t.clientX - tStartX);
+    view.y = tViewY + (t.clientY - tStartY);
+    applyTransform(false);
+    e.preventDefault();
+  }, { passive: false });
+})();
+
+/* ========== 滚轮缩放 ========== */
+$('canvasArea').addEventListener('wheel', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  const area = $('canvasArea');
+  const rect = area.getBoundingClientRect();
+  const mx = e.clientX - rect.left - rect.width / 2;
+  const my = e.clientY - rect.top - rect.height / 2;
+  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const newScale = Math.min(Math.max(view.scale * factor, 0.15), 5);
+  const ratio = newScale / view.scale;
+  view.x = view.x * ratio - mx * (ratio - 1);
+  view.y = view.y * ratio - my * (ratio - 1);
+  view.scale = newScale;
+  applyTransform(false);
+}, { passive: false });
+
+/* ========== 换风格 ========== */
+function changeStyle() {
+  const styles = [
+    { sloppiness: 1.0, label: '精细' },
+    { sloppiness: 1.5, label: '标准' },
+    { sloppiness: 2.2, label: '潦草' }
+  ];
+  const idx = styles.findIndex(s => s.sloppiness === currentSloppiness);
+  const next = styles[(idx + 1) % styles.length];
+  currentSloppiness = next.sloppiness;
+  currentSeed = Math.floor(Math.random() * 100000);
+  const code = $('mermaidCode').value;
+  if (code.trim() && libState === 'ready') {
+    renderWithExcalidraw(code);
+    toast(`已切换为「${next.label}」风格`);
+  } else if (libState !== 'ready') toast('渲染引擎尚未就绪', 'warn');
+  else toast('先生成图表再切换风格', 'warn');
+}
+
+/* ========== 手动修复按钮 ========== */
+function repairCode() {
+  const code = $('mermaidCode').value;
+  if (!code.trim()) { toast('没有可修复的代码', 'warn'); return; }
+  const fixed = repairMermaidCode(cleanMermaidCode(code));
+  $('mermaidCode').value = fixed;
+  if (libState === 'ready') renderWithExcalidraw(fixed);
+  toast('已尝试修复代码');
+}
+
+/* ========== 导出 ========== */
+function getSvgElement() { return $('stage').querySelector('svg'); }
+
+function buildExportSvg() {
+  const svg = getSvgElement();
+  if (!svg) return null;
+  const vb = svg.getAttribute('viewBox');
+  const parts = (vb || '').trim().split(/[\s,]+/).map(Number);
+  let w, h, ox = 0, oy = 0;
+  if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+    ox = parts[0]; oy = parts[1]; w = parts[2]; h = parts[3];
+  } else {
+    const rect = svg.getBoundingClientRect();
+    w = rect.width || 800; h = rect.height || 600;
+  }
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.setAttribute('width', w);
+  clone.setAttribute('height', h);
+  clone.setAttribute('viewBox', `${ox} ${oy} ${w} ${h}`);
+  clone.removeAttribute('style');
+  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  bg.setAttribute('x', String(ox));
+  bg.setAttribute('y', String(oy));
+  bg.setAttribute('width', String(w));
+  bg.setAttribute('height', String(h));
+  bg.setAttribute('fill', '#ffffff');
+  clone.insertBefore(bg, clone.firstChild);
+  return { clone, w, h };
+}
+
+function exportSVG() {
+  const built = buildExportSvg();
+  if (!built) { toast('没有可导出的图表', 'warn'); return; }
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+            + new XMLSerializer().serializeToString(built.clone);
+  const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+  downloadBlob(blob, `excalidraw-chart-${Date.now()}.svg`);
+  toast('SVG 已导出');
+}
+
+async function exportPNG() {
+  const built = buildExportSvg();
+  if (!built) { toast('没有可导出的图表', 'warn'); return; }
+  const { clone, w, h } = built;
+  const xml = new XMLSerializer().serializeToString(clone);
+  const dataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(xml)));
+  const scale = 2;
+  const img = new Image();
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('SVG 转图片失败'));
+      img.src = dataUrl;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(w * scale);
+    canvas.height = Math.ceil(h * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) { toast('导出失败', 'error'); return; }
+      downloadBlob(blob, `excalidraw-chart-${Date.now()}@2x.png`);
+      toast('PNG 已导出（2 倍分辨率）');
+    }, 'image/png');
+  } catch (err) {
+    console.error(err);
+    toast('PNG 导出失败：' + err.message, 'error');
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ========== 设置 ========== */
+function openSettings() {
+  $('cfgApiKey').value = appConfig.apiKey;
+  const m = $('settingsModal');
+  m.classList.remove('hidden'); m.classList.add('flex');
+  setTimeout(() => $('cfgApiKey').focus(), 60);
+}
+function closeSettings() {
+  const m = $('settingsModal');
+  m.classList.add('hidden'); m.classList.remove('flex');
+}
+function saveSettings() {
+  appConfig.apiKey = $('cfgApiKey').value.trim();
+  persistConfig(); refreshModeBadge(); closeSettings();
+  toast(appConfig.apiKey ? 'API Key 已保存，GLM 在线模式已就绪' : '未填写 Key，当前为离线演示模式');
+}
+function clearConfig() {
+  appConfig.apiKey = '';
+  persistConfig();
+  $('cfgApiKey').value = '';
+  refreshModeBadge();
+  toast('已清除 API Key');
+}
+function toggleKeyVisible() {
+  const input = $('cfgApiKey'), icon = $('eyeIcon');
+  if (input.type === 'password') { input.type = 'text'; icon.className = 'fa-regular fa-eye-slash text-sm'; }
+  else { input.type = 'password'; icon.className = 'fa-regular fa-eye text-sm'; }
+}
+
+/* ========== 杂项 UI ========== */
+function setStatus(kind, text) {
+  const map = {
+    idle:    'px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold',
+    pending: 'px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold',
+    success: 'px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold',
+    error:   'px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold'
+  };
+  const badge = $('statusBadge');
+  badge.className = map[kind] || map.idle;
+  badge.textContent = text;
+}
+
+function showLoading(on, text) {
+  const overlay = $('loadingOverlay'), btn = $('genBtn');
+  const btnText = $('btnText'), btnIcon = $('btnIcon');
+  if (on) {
+    if (text) $('loadingText').textContent = text;
+    overlay.classList.remove('hidden'); overlay.classList.add('flex');
+    btn.disabled = true; btn.classList.add('opacity-70', 'cursor-not-allowed');
+    btnText.textContent = '生成中'; btnIcon.className = 'fa-solid fa-spinner fa-spin';
+  } else {
+    overlay.classList.add('hidden'); overlay.classList.remove('flex');
+    btn.disabled = false; btn.classList.remove('opacity-70', 'cursor-not-allowed');
+    btnText.textContent = '生成图表'; btnIcon.className = 'fa-solid fa-paper-plane';
+  }
+}
+
+function showError(msg) { $('errorMsg').textContent = msg; $('errorToast').classList.remove('hidden'); }
+function hideError() { $('errorToast').classList.add('hidden'); }
+
+function copyCode() {
+  const code = $('mermaidCode').value;
+  if (!code.trim()) { toast('没有可复制的代码', 'warn'); return; }
+  navigator.clipboard.writeText(code)
+    .then(() => toast('代码已复制到剪贴板'))
+    .catch(() => { $('mermaidCode').select(); document.execCommand('copy'); toast('代码已复制'); });
+}
+
+function fillExample(text) { $('promptInput').value = text; $('promptInput').focus(); }
+
+function clearAll() {
+  $('promptInput').value = '';
+  $('mermaidCode').value = '';
+  hideError();
+  showEmptyState();
+  toast('已清空');
+}
+
+let toastTimer = null;
+function toast(msg, kind = 'success') {
+  const el = $('toast'), icon = $('toastIcon');
+  $('toastMsg').textContent = msg;
+  const icons = {
+    success: 'fa-solid fa-circle-check text-emerald-400',
+    warn: 'fa-solid fa-triangle-exclamation text-amber-400',
+    error: 'fa-solid fa-circle-xmark text-red-400'
+  };
+  icon.className = icons[kind] || icons.success;
+  el.classList.remove('hidden');
+  el.firstElementChild.classList.add('fade-in');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), 2600);
+}
+
+/* ========== 事件绑定 ========== */
+$('mermaidCode').addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    const code = $('mermaidCode').value;
+    if (code.trim() && libState === 'ready') renderWithExcalidraw(code);
+    else if (!code.trim()) showEmptyState();
+  }, 600);
+});
+
+$('promptInput').addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); generateChart(); }
+});
+
+$('settingsModal').addEventListener('click', (e) => {
+  if (e.target === $('settingsModal')) closeSettings();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeSettings();
+  if ((e.ctrlKey || e.metaKey) && e.key === '0') { e.preventDefault(); resetView(); }
+});
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (getSvgElement()) fitToView(false); }, 200);
+});
+
+/* ========== 挂载到 window ========== */
+Object.assign(window, {
+  openSettings, closeSettings, saveSettings, clearConfig, toggleKeyVisible,
+  generateChart, clearAll, exportSVG, exportPNG,
+  zoomIn, zoomOut, resetView, fitToView, changeStyle,
+  copyCode, repairCode, hideError, fillExample
+});
+
+/* ========== 启动 + 异步加载 ========== */
+(function boot() {
+  refreshModeBadge();
+  showEmptyState();
+  applyTransform(false);
+})();
+
+(async function loadExcalidraw() {
+  try {
+    setLibStatus('loading', '正在加载 Excalidraw 引擎…');
+    const m = await import("https://esm.sh/@excalidraw/mermaid-to-excalidraw@2.2.2");
+    parseMermaidToExcalidraw = m.parseMermaidToExcalidraw;
+    const e = await import("https://esm.sh/@excalidraw/excalidraw@0.18.0?bundle");
+    convertToExcalidrawElements = e.convertToExcalidrawElements;
+    exportToSvg = e.exportToSvg;
+    setLibStatus('ready', '✓ 渲染引擎已就绪');
+    console.log('[Excalidraw] 加载完成');
+    if (!appConfig.apiKey) {
+      setTimeout(() => toast('提示：填入智谱 API Key 即可启用 AI 生成', 'warn'), 500);
+    }
+  } catch (err) {
+    console.error('[Excalidraw 加载失败]', err);
+    setLibStatus('error', '渲染引擎加载失败，请刷新重试');
+    toast('渲染引擎加载失败，请检查网络后刷新页面', 'error');
+  }
+})();
+</script>
+</body>
+</html>
